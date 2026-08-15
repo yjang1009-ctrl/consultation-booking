@@ -9,7 +9,7 @@
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   * { box-sizing: border-box; }
   body { margin: 0; font-family: 'Noto Sans KR', sans-serif; }
@@ -20,10 +20,6 @@
 
 <script type="text/babel" data-presets="react">
 
-// ============================================================
-// ⚠️ 여기 두 줄만 본인 Supabase 프로젝트 값으로 바꿔주세요.
-// Supabase 대시보드 > Project Settings > API 에서 확인 가능합니다.
-// ============================================================
 const SUPABASE_URL = "https://lbuzrybiraresjvxacpv.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxidXpyeWJpcmFyZXNqdnhhY3B2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY3OTE0NDgsImV4cCI6MjEwMjM2NzQ0OH0.ecK1irhHl7mhEUgXVkP3w5TmlWS853OIM_MQ5xoTI2A";
 
@@ -31,7 +27,6 @@ const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const { useState, useEffect, useCallback } = React;
 
-// ---------- 상수 ----------
 const HOURS = [9, 10, 11, 12, 13, 14, 15, 16];
 const AVAILABLE_HOURS = HOURS.filter((h) => h < 11 || h >= 13);
 const WEEKDAY_LABEL = ["일", "월", "화", "수", "목", "금", "토"];
@@ -49,7 +44,6 @@ async function fetchAvailability(dKey) {
   return { bookedHours: (booked || []).map((r) => r.hour), closedHours: (closed || []).map((r) => r.hour), error: false };
 }
 
-// ---------- 재사용 달력 ----------
 function MiniCalendar({ viewMonth, setViewMonth, selectedDate, onSelectDate, minDate, maxDate }) {
   function isSelectableDay(d) {
     if (d < minDate || d > maxDate) return false;
@@ -109,11 +103,10 @@ function FieldLabel({ text }) {
 }
 
 function App() {
-  const [mode, setMode] = useState("parent"); // parent | adminGate | admin
+  const [mode, setMode] = useState("parent");
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const maxDate = new Date(today); maxDate.setMonth(maxDate.getMonth() + 2);
 
-  // ---------------- 학부모 ----------------
   const [step, setStep] = useState(1);
   const [childName, setChildName] = useState("");
   const [parentPhone, setParentPhone] = useState("");
@@ -184,7 +177,6 @@ function App() {
     setAvail({ bookedHours: [], closedHours: [] }); setStampVisible(false); setSubmitError("");
   }
 
-  // ---------------- 관리자 ----------------
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [authError, setAuthError] = useState("");
