@@ -24,7 +24,10 @@ window.addEventListener('unhandledrejection', function (e) {
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<script crossorigin src="https://unpkg.com/@supabase/supabase-js@2.45.3/dist/umd/supabase.js"></script>
+<script type="module">
+  import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+  window.supabase = { createClient };
+</script>
 <style>
   * { box-sizing: border-box; }
   body { margin: 0; font-family: 'Noto Sans KR', sans-serif; }
@@ -43,7 +46,7 @@ try {
 const SUPABASE_URL = "https://lbuzrybiraresjvxacpv.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxidXpyeWJpcmFyZXNqdnhhY3B2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY3OTE0NDgsImV4cCI6MjEwMjM2NzQ0OH0.ecK1irhHl7mhEUgXVkP3w5TmlWS853OIM_MQ5xoTI2A";
 
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+let supabase;
 
 const { useState, useEffect, useCallback } = React;
 
@@ -543,7 +546,17 @@ const styles = {
   toggleBtnClosed: { background: SAGE, color: PAPER },
 };
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+function boot() {
+  supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+}
+if (window.supabase) {
+  boot();
+} else {
+  var waitForSupabase = setInterval(function () {
+    if (window.supabase) { clearInterval(waitForSupabase); boot(); }
+  }, 20);
+}
 } catch (err) {
   document.getElementById("root").innerHTML = '<pre style="white-space:pre-wrap;padding:20px;color:#b23a3a;font-family:monospace;font-size:13px;">' + (err && err.stack ? err.stack : String(err)) + '</pre>';
 }
