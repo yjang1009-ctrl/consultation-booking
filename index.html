@@ -25,7 +25,6 @@ window.addEventListener('unhandledrejection', function (e) {
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script crossorigin src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-
 <style>
   * { box-sizing: border-box; }
   body { margin: 0; font-family: 'Noto Sans KR', sans-serif; }
@@ -35,6 +34,8 @@ window.addEventListener('unhandledrejection', function (e) {
 <div id="root"></div>
 
 <script type="text/babel" data-presets="react">
+  try {
+
 
 const SUPABASE_URL = "https://lbuzrybiraresjvxacpv.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxidXpyeWJpcmFyZXNqdnhhY3B2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY3OTE0NDgsImV4cCI6MjEwMjM2NzQ0OH0.ecK1irhHl7mhEUgXVkP3w5TmlWS853OIM_MQ5xoTI2A";
@@ -115,4 +116,431 @@ function MiniCalendar({ viewMonth, setViewMonth, selectedDate, onSelectDate, min
 }
 
 function FieldLabel({ text }) {
-  return <div style={styles.fieldLabel}>{text}
+  return <div style={styles.fieldLabel}>{text}</div>;
+}
+
+function App() {
+  const [mode, setMode] = useState("parent");
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const maxDate = new Date(today); maxDate.setMonth(maxDate.getMonth() + 2);
+
+  const [step, setStep] = useState(1);
+  const [childName, setChildName] = useState("");
+  const [parentPhone, setParentPhone] = useState("");
+  const [errors, setErrors] = useState({});
+  const [viewMonth, setViewMonth] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1));
+  const [selectedDate, setSelectedDate] = useState(null);
+  const [selectedHour, setSelectedHour] = useState(null);
+  const [avail, setAvail] = useState({ bookedHours: [], closedHours: [] });
+  const [loadingSlots, setLoadingSlots] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+  const [stampVisible, setStampVisible] = useState(false);
+
+  const loadAvail = useCallback(async (date) => {
+    setLoadingSlots(true);
+    const result = await fetchAvailability(dateKey(date));
+    setAvail(result);
+    setLoadingSlots(false);
+  }, []);
+
+  useEffect(() => { if (selectedDate && mode === "parent") loadAvail(selectedDate); }, [selectedDate, mode, loadAvail]);
+
+  function validateStep1() {
+    const e = {};
+    if (!childName.trim()) e.childName = "자녀 이름을 입력해주세요.";
+    const digits = parentPhone.replace(/[^0-9]/g, "");
+    if (!digits) e.parentPhone = "학부모 연락처를 입력해주세요.";
+    else if (digits.length < 9 || digits.length > 11) e.parentPhone = "연락처 자리수를 확인해주세요.";
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  }
+  function formatPhone(v) {
+    const d = v.replace(/[^0-9]/g, "").slice(0, 11);
+    if (d.length < 4) return d;
+    if (d.length < 8) return `${d.slice(0, 3)}-${d.slice(3)}`;
+    return `${d.slice(0, 3)}-${d.slice(3, 7)}-${d.slice(7)}`;
+  }
+
+  async function handleConfirmBooking() {
+    if (!selectedDate || selectedHour == null) return;
+    setSubmitting(true);
+    setSubmitError("");
+    const { error } = await supabase.from("bookings").insert({
+      date: dateKey(selectedDate),
+      hour: selectedHour,
+      child_name: childName.trim(),
+      parent_phone: parentPhone,
+    });
+    if (error) {
+      if (error.code === "23505") {
+        setSubmitError("방금 다른 학부모가 예약한 시간이에요. 다른 시간을 선택해주세요.");
+        loadAvail(selectedDate);
+        setSelectedHour(null);
+      } else {
+        setSubmitError("예약 저장에 실패했어요. 잠시 후 다시 시도해주세요.");
+      }
+      setSubmitting(false);
+      return;
+    }
+    setSubmitting(false);
+    setStep(4);
+    setTimeout(() => setStampVisible(true), 300);
+  }
+
+  function resetAll() {
+    setStep(1); setChildName(""); setParentPhone("");
+    setSelectedDate(null); setSelectedHour(null);
+    setAvail({ bookedHours: [], closedHours: [] }); setStampVisible(false); setSubmitError("");
+  }
+
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [adminViewMonth, setAdminViewMonth] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1));
+  const [adminSelectedDate, setAdminSelectedDate] = useState(null);
+  const [adminBookings, setAdminBookings] = useState([]);
+  const [adminClosed, setAdminClosed] = useState([]);
+  const [loadingAdmin, setLoadingAdmin] = useState(false);
+  const [adminBusyHour, setAdminBusyHour] = useState(null);
+  const [cancelTarget, setCancelTarget] = useState(null);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => { if (data.session) setMode("admin"); });
+  }, []);
+
+  async function loadAdminDay(date) {
+    setLoadingAdmin(true);
+    const dKey = dateKey(date);
+    const [{ data: bookings }, { data: closed }] = await Promise.all([
+      supabase.from("bookings").select("hour, child_name, parent_phone").eq("date", dKey),
+      supabase.from("closed_slots").select("hour").eq("date", dKey),
+    ]);
+    setAdminBookings(bookings || []);
+    setAdminClosed((closed || []).map((r) => r.hour));
+    setLoadingAdmin(false);
+  }
+  useEffect(() => { if (adminSelectedDate && mode === "admin") loadAdminDay(adminSelectedDate); }, [adminSelectedDate, mode]);
+
+  async function handleLogin() {
+    setAuthLoading(true); setAuthError("");
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    setAuthLoading(false);
+    if (error) { setAuthError("로그인에 실패했어요. 이메일/비밀번호를 확인해주세요."); return; }
+    setEmail(""); setPassword(""); setMode("admin");
+  }
+  async function handleLogout() {
+    await supabase.auth.signOut();
+    setAdminSelectedDate(null); setMode("parent");
+  }
+
+  async function toggleClosed(hour) {
+    setAdminBusyHour(hour);
+    const dKey = dateKey(adminSelectedDate);
+    if (adminClosed.includes(hour)) {
+      await supabase.from("closed_slots").delete().eq("date", dKey).eq("hour", hour);
+    } else {
+      await supabase.from("closed_slots").insert({ date: dKey, hour });
+    }
+    await loadAdminDay(adminSelectedDate);
+    setAdminBusyHour(null);
+  }
+  async function cancelBooking(hour) {
+    setAdminBusyHour(hour);
+    const dKey = dateKey(adminSelectedDate);
+    await supabase.from("bookings").delete().eq("date", dKey).eq("hour", hour);
+    await loadAdminDay(adminSelectedDate);
+    setAdminBusyHour(null); setCancelTarget(null);
+  }
+  async function bulkSetDay(closeAll) {
+    setAdminBusyHour("bulk");
+    const dKey = dateKey(adminSelectedDate);
+    const bookedHours = adminBookings.map((b) => b.hour);
+    if (closeAll) {
+      const toClose = AVAILABLE_HOURS.filter((h) => !bookedHours.includes(h) && !adminClosed.includes(h));
+      if (toClose.length) await supabase.from("closed_slots").insert(toClose.map((h) => ({ date: dKey, hour: h })));
+    } else {
+      await supabase.from("closed_slots").delete().eq("date", dKey);
+    }
+    await loadAdminDay(adminSelectedDate);
+    setAdminBusyHour(null);
+  }
+
+  return (
+    <div style={styles.page}>
+      <div style={{ width: "100%", maxWidth: 420 }}>
+        <div style={styles.card}>
+
+          {mode === "parent" && (
+            <>
+              <div style={styles.header}>
+                <div style={styles.crest}>
+                  <svg width="34" height="34" viewBox="0 0 34 34" fill="none">
+                    <path d="M17 2 L30 9 V19 C30 26 24 30.5 17 32 C10 30.5 4 26 4 19 V9 Z" stroke="#F7F4ED" strokeWidth="1.6" fill="none" />
+                    <path d="M17 9 L22 12.5 V19 C22 22 20 24.3 17 25.3 C14 24.3 12 22 12 19 V12.5 Z" fill="#F7F4ED" />
+                  </svg>
+                </div>
+                <div>
+                  <div style={styles.headerEyebrow}>학부모 상담 신청서</div>
+                  <div style={styles.headerTitle}>2학기 담임 상담 예약</div>
+                </div>
+              </div>
+
+              <div style={styles.progressRow}>
+                {["학부모 정보", "상담 날짜", "상담 시간"].map((label, i) => {
+                  const idx = i + 1;
+                  const state = step > idx || step === 4 ? "done" : step === idx ? "active" : "todo";
+                  return (
+                    <React.Fragment key={label}>
+                      <div style={styles.progressItem}>
+                        <div style={{ ...styles.progressDot, ...(state === "done" ? styles.progressDotDone : state === "active" ? styles.progressDotActive : styles.progressDotTodo) }}>
+                          {state === "done" ? "✓" : idx}
+                        </div>
+                        <div style={{ ...styles.progressLabel, color: state === "todo" ? "#B5AC9A" : "#3A3226", fontWeight: state === "active" ? 700 : 500 }}>{label}</div>
+                      </div>
+                      {idx < 3 && <div style={styles.progressLine} />}
+                    </React.Fragment>
+                  );
+                })}
+              </div>
+
+              <div style={styles.body}>
+                {step === 1 && (
+                  <div>
+                    <FieldLabel text="자녀 이름" />
+                    <input style={{ ...styles.input, ...(errors.childName ? styles.inputError : {}) }} placeholder="예) 김민준" value={childName} onChange={(e) => setChildName(e.target.value)} />
+                    {errors.childName && <div style={styles.errorText}>{errors.childName}</div>}
+                    <div style={{ height: 18 }} />
+                    <FieldLabel text="학부모 연락처" />
+                    <input style={{ ...styles.input, ...(errors.parentPhone ? styles.inputError : {}) }} placeholder="010-0000-0000" value={parentPhone} onChange={(e) => setParentPhone(formatPhone(e.target.value))} inputMode="numeric" />
+                    {errors.parentPhone && <div style={styles.errorText}>{errors.parentPhone}</div>}
+                    <button style={{ ...styles.primaryBtn, marginTop: 26 }} onClick={() => validateStep1() && setStep(2)}>다음 · 날짜 선택</button>
+                  </div>
+                )}
+
+                {step === 2 && (
+                  <div>
+                    <MiniCalendar viewMonth={viewMonth} setViewMonth={setViewMonth} selectedDate={selectedDate}
+                      onSelectDate={(d) => { setSelectedDate(d); setSelectedHour(null); }} minDate={today} maxDate={maxDate} />
+                    <div style={styles.legendRow}><span style={styles.legendDot} /> 평일만 선택 가능 · 주말·공휴일 제외</div>
+                    <div style={styles.footerBtnRow}>
+                      <button style={styles.ghostBtn} onClick={() => setStep(1)}>이전</button>
+                      <button style={{ ...styles.primaryBtn, opacity: selectedDate ? 1 : 0.4 }} disabled={!selectedDate} onClick={() => setStep(3)}>다음 · 시간 선택</button>
+                    </div>
+                  </div>
+                )}
+
+                {step === 3 && (
+                  <div>
+                    <div style={styles.selectedDateBanner}>
+                      {selectedDate?.getFullYear()}년 {selectedDate ? selectedDate.getMonth() + 1 : ""}월 {selectedDate?.getDate()}일 ({WEEKDAY_LABEL[selectedDate?.getDay() ?? 0]})
+                    </div>
+                    {loadingSlots ? (
+                      <div style={styles.loadingBox}>예약 현황 확인 중...</div>
+                    ) : avail.error ? (
+                      <div style={styles.errorBanner}>예약 현황을 불러오지 못했어요. 새로고침 후 다시 시도해주세요.</div>
+                    ) : (
+                      <div style={styles.hourGrid}>
+                        {AVAILABLE_HOURS.map((h) => {
+                          const isBooked = avail.bookedHours.includes(h);
+                          const isClosed = avail.closedHours.includes(h);
+                          const isBlocked = isBooked || isClosed;
+                          const isSelected = selectedHour === h;
+                          return (
+                            <button key={h} disabled={isBlocked} onClick={() => setSelectedHour(h)}
+                              style={{ ...styles.hourCell, ...(isBlocked ? styles.hourCellBooked : {}), ...(isSelected ? styles.hourCellSelected : {}) }}>
+                              <div style={{ fontWeight: 700 }}>{timeLabel(h)}</div>
+                              <div style={{ fontSize: 11, marginTop: 3, opacity: 0.75 }}>{isBooked ? "예약 마감" : isClosed ? "상담 불가" : "예약 가능"}</div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                    <div style={styles.lunchNote}>점심시간(11:00~13:00)에는 상담을 진행하지 않아요.</div>
+                    {submitError && <div style={styles.errorBanner}>{submitError}</div>}
+                    <div style={styles.footerBtnRow}>
+                      <button style={styles.ghostBtn} onClick={() => setStep(2)}>이전</button>
+                      <button style={{ ...styles.primaryBtn, opacity: selectedHour != null && !submitting ? 1 : 0.4 }} disabled={selectedHour == null || submitting} onClick={handleConfirmBooking}>
+                        {submitting ? "예약 처리 중..." : "상담 예약 확정"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {step === 4 && (
+                  <div style={styles.doneWrap}>
+                    <div style={styles.receipt}>
+                      <div style={styles.receiptRow}><span style={styles.receiptLabel}>자녀 이름</span><span style={styles.receiptValue}>{childName}</span></div>
+                      <div style={styles.receiptRow}><span style={styles.receiptLabel}>학부모 연락처</span><span style={styles.receiptValue}>{parentPhone}</span></div>
+                      <div style={styles.receiptRow}><span style={styles.receiptLabel}>상담 일자</span><span style={styles.receiptValue}>{selectedDate?.getFullYear()}.{pad((selectedDate?.getMonth() ?? 0) + 1)}.{pad(selectedDate?.getDate() ?? 0)} ({WEEKDAY_LABEL[selectedDate?.getDay() ?? 0]})</span></div>
+                      <div style={styles.receiptRow}><span style={styles.receiptLabel}>상담 시간</span><span style={styles.receiptValue}>{selectedHour != null ? timeLabel(selectedHour) : ""}</span></div>
+                      {stampVisible && (
+                        <div style={styles.stamp}>
+                          <div style={styles.stampInner}><div style={{ fontSize: 12, letterSpacing: 2 }}>예약</div><div style={{ fontSize: 14, letterSpacing: 1 }}>완료</div></div>
+                        </div>
+                      )}
+                    </div>
+                    <div style={styles.doneText}>상담 예약이 접수되었어요. 학교에서 별도로 안내드릴게요.</div>
+                    <button style={{ ...styles.ghostBtn, marginTop: 22 }} onClick={resetAll}>새 예약 하기</button>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          {mode === "adminGate" && (
+            <>
+              <div style={styles.header}>
+                <div style={styles.crest}>🔒</div>
+                <div><div style={styles.headerEyebrow}>담임 교사 전용</div><div style={styles.headerTitle}>관리자 로그인</div></div>
+              </div>
+              <div style={styles.body}>
+                <FieldLabel text="이메일" />
+                <input style={styles.input} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="teacher@example.com" />
+                <div style={{ height: 14 }} />
+                <FieldLabel text="비밀번호" />
+                <input style={{ ...styles.input, ...(authError ? styles.inputError : {}) }} type="password" value={password}
+                  onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleLogin()} />
+                {authError && <div style={styles.errorText}>{authError}</div>}
+                <button style={{ ...styles.primaryBtn, marginTop: 22, opacity: authLoading ? 0.6 : 1 }} disabled={authLoading} onClick={handleLogin}>
+                  {authLoading ? "로그인 중..." : "로그인"}
+                </button>
+                <button style={styles.linkBtn} onClick={() => setMode("parent")}>학부모 화면으로 돌아가기</button>
+              </div>
+            </>
+          )}
+
+          {mode === "admin" && (
+            <>
+              <div style={styles.header}>
+                <button style={{ ...styles.navBtn, background: "rgba(247,244,237,0.12)", borderColor: "rgba(247,244,237,0.3)", color: "#F7F4ED" }} onClick={handleLogout}>←</button>
+                <div><div style={styles.headerEyebrow}>담임 교사 전용</div><div style={styles.headerTitle}>상담 일정 관리</div></div>
+              </div>
+              <div style={styles.body}>
+                <MiniCalendar viewMonth={adminViewMonth} setViewMonth={setAdminViewMonth} selectedDate={adminSelectedDate}
+                  onSelectDate={(d) => setAdminSelectedDate(d)} minDate={today} maxDate={maxDate} />
+                {!adminSelectedDate && <div style={{ ...styles.legendRow, marginTop: 14 }}><span style={styles.legendDot} /> 날짜를 선택하면 시간대별 설정을 할 수 있어요.</div>}
+                {adminSelectedDate && (
+                  <div style={{ marginTop: 20 }}>
+                    <div style={styles.selectedDateBanner}>{adminSelectedDate.getFullYear()}년 {adminSelectedDate.getMonth() + 1}월 {adminSelectedDate.getDate()}일 ({WEEKDAY_LABEL[adminSelectedDate.getDay()]})</div>
+                    {loadingAdmin ? <div style={styles.loadingBox}>불러오는 중...</div> : (
+                      <>
+                        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+                          <button style={{ ...styles.smallGhostBtn, opacity: adminBusyHour === "bulk" ? 0.5 : 1 }} disabled={adminBusyHour === "bulk"} onClick={() => bulkSetDay(true)}>이 날 전체 닫기</button>
+                          <button style={{ ...styles.smallGhostBtn, opacity: adminBusyHour === "bulk" ? 0.5 : 1 }} disabled={adminBusyHour === "bulk"} onClick={() => bulkSetDay(false)}>이 날 전체 열기</button>
+                        </div>
+                        <div style={styles.ledger}>
+                          {AVAILABLE_HOURS.map((h) => {
+                            const booking = adminBookings.find((b) => b.hour === h);
+                            const isClosed = adminClosed.includes(h);
+                            const busy = adminBusyHour === h;
+                            return (
+                              <div key={h} style={styles.ledgerRow}>
+                                <div style={{ flex: 1 }}>
+                                  <div style={{ fontWeight: 700, fontSize: 13.5 }}>{timeLabel(h)}</div>
+                                  {booking ? <div style={styles.ledgerSub}>예약됨 · {booking.child_name} 학부모 ({booking.parent_phone})</div>
+                                    : isClosed ? <div style={{ ...styles.ledgerSub, color: "#B5AC9A" }}>닫힘 · 상담 불가</div>
+                                    : <div style={{ ...styles.ledgerSub, color: "#5E7C5E" }}>상담 가능</div>}
+                                </div>
+                                {booking ? (
+                                  cancelTarget === h ? (
+                                    <div style={{ display: "flex", gap: 6 }}>
+                                      <button style={{ ...styles.dangerBtn, opacity: busy ? 0.5 : 1 }} disabled={busy} onClick={() => cancelBooking(h)}>취소 확정</button>
+                                      <button style={styles.tinyIconBtn} onClick={() => setCancelTarget(null)}>✕</button>
+                                    </div>
+                                  ) : <button style={styles.smallGhostBtn} onClick={() => setCancelTarget(h)}>예약 취소</button>
+                                ) : (
+                                  <button style={{ ...styles.toggleBtn, ...(isClosed ? styles.toggleBtnClosed : styles.toggleBtnOpen), opacity: busy ? 0.5 : 1 }} disabled={busy} onClick={() => toggleClosed(h)}>
+                                    {isClosed ? "열기" : "닫기"}
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+
+        {mode === "parent" && <button style={styles.bottomAdminLink} onClick={() => setMode("adminGate")}>선생님이신가요? 관리자 모드</button>}
+      </div>
+    </div>
+  );
+}
+
+const NAVY = "#1E3450", PAPER = "#F7F4ED", PAPER_LINE = "#E4DDCB", INK = "#3A3226", SEAL = "#B23A3A", SAGE = "#5E7C5E";
+const styles = {
+  page: { minHeight: "100vh", width: "100%", background: "linear-gradient(180deg, #EDE7D8 0%, #E4DCC7 100%)", display: "flex", justifyContent: "center", padding: "28px 14px", color: INK },
+  card: { width: "100%", background: PAPER, borderRadius: 4, boxShadow: "0 1px 2px rgba(30,52,80,0.06), 0 12px 30px rgba(30,52,80,0.14)", border: `1px solid ${PAPER_LINE}`, overflow: "hidden" },
+  header: { background: NAVY, padding: "20px 22px", display: "flex", alignItems: "center", gap: 14 },
+  crest: { width: 40, height: 40, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 },
+  headerEyebrow: { color: "#B9C6D6", fontSize: 11, letterSpacing: 1.5, fontWeight: 500 },
+  headerTitle: { color: PAPER, fontFamily: "'Noto Serif KR', serif", fontWeight: 700, fontSize: 19, marginTop: 2 },
+  progressRow: { display: "flex", alignItems: "flex-start", padding: "18px 22px 14px", borderBottom: `1px solid ${PAPER_LINE}` },
+  progressItem: { display: "flex", flexDirection: "column", alignItems: "center", gap: 6, width: 76 },
+  progressDot: { width: 24, height: 24, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700 },
+  progressDotDone: { background: SEAL, color: PAPER }, progressDotActive: { background: NAVY, color: PAPER }, progressDotTodo: { background: "#E4DDCB", color: "#B5AC9A" },
+  progressLabel: { fontSize: 11, textAlign: "center", lineHeight: 1.3 },
+  progressLine: { flex: 1, height: 1, background: PAPER_LINE, marginTop: 12 },
+  body: { padding: "24px 22px 26px" },
+  fieldLabel: { fontSize: 13, fontWeight: 700, color: NAVY, marginBottom: 8 },
+  input: { width: "100%", padding: "12px 13px", fontSize: 15, border: `1.5px solid ${PAPER_LINE}`, borderRadius: 3, background: "#FFFEFB", outline: "none", color: INK },
+  inputError: { borderColor: SEAL },
+  errorText: { color: SEAL, fontSize: 12, marginTop: 6 },
+  errorBanner: { marginTop: 14, padding: "10px 12px", background: "#F7E7E4", border: `1px solid ${SEAL}`, color: "#8A2E2E", fontSize: 13, borderRadius: 3 },
+  primaryBtn: { width: "100%", padding: "13px 0", background: NAVY, color: PAPER, border: "none", borderRadius: 3, fontSize: 14, fontWeight: 700, cursor: "pointer" },
+  ghostBtn: { flex: "0 0 auto", padding: "13px 20px", background: "transparent", color: NAVY, border: `1.5px solid ${NAVY}`, borderRadius: 3, fontSize: 14, fontWeight: 700, cursor: "pointer" },
+  smallGhostBtn: { padding: "8px 12px", background: "transparent", color: NAVY, border: `1.3px solid ${PAPER_LINE}`, borderRadius: 3, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" },
+  dangerBtn: { padding: "8px 12px", background: SEAL, color: PAPER, border: "none", borderRadius: 3, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" },
+  tinyIconBtn: { width: 30, height: 30, borderRadius: 3, border: `1.3px solid ${PAPER_LINE}`, background: "transparent", cursor: "pointer", color: "#8A8478" },
+  linkBtn: { display: "block", width: "100%", textAlign: "center", background: "none", border: "none", color: "#8A8478", fontSize: 12.5, marginTop: 16, cursor: "pointer" },
+  bottomAdminLink: { display: "block", width: "100%", textAlign: "center", background: "none", border: "none", color: "#8A8478", fontSize: 12.5, marginTop: 14, cursor: "pointer" },
+  footerBtnRow: { display: "flex", gap: 10, marginTop: 26 },
+  calendarHead: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 },
+  navBtn: { width: 30, height: 30, borderRadius: 3, border: `1px solid ${PAPER_LINE}`, background: "transparent", cursor: "pointer", color: NAVY, fontSize: 16 },
+  monthLabel: { fontFamily: "'Noto Serif KR', serif", fontWeight: 700, fontSize: 16, color: NAVY },
+  weekRow: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", marginBottom: 6 },
+  weekLabel: { textAlign: "center", fontSize: 11, fontWeight: 700, padding: "4px 0" },
+  grid: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 },
+  dayCell: { aspectRatio: "1", border: "none", background: "transparent", borderRadius: 3, fontSize: 13.5, fontWeight: 500, color: INK, cursor: "pointer" },
+  dayCellDisabled: { color: "#D2CBB9", cursor: "not-allowed" },
+  dayCellSelected: { background: NAVY, color: PAPER, fontWeight: 700 },
+  legendRow: { marginTop: 14, fontSize: 11.5, color: "#8A8478", display: "flex", alignItems: "center", gap: 6 },
+  legendDot: { width: 6, height: 6, borderRadius: "50%", background: "#C7BFAE", display: "inline-block", flexShrink: 0 },
+  selectedDateBanner: { fontFamily: "'Noto Serif KR', serif", fontWeight: 700, fontSize: 16, color: NAVY, marginBottom: 16, paddingBottom: 12, borderBottom: `1px dashed ${PAPER_LINE}` },
+  loadingBox: { padding: "30px 0", textAlign: "center", color: "#8A8478", fontSize: 13 },
+  hourGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 },
+  hourCell: { padding: "12px 10px", border: `1.5px solid ${PAPER_LINE}`, borderRadius: 3, background: "#FFFEFB", cursor: "pointer", textAlign: "left", color: INK, fontSize: 13 },
+  hourCellBooked: { background: "#EDE9DD", color: "#B5AC9A", cursor: "not-allowed", textDecoration: "line-through" },
+  hourCellSelected: { borderColor: NAVY, background: "#E9EEF3", color: NAVY },
+  lunchNote: { marginTop: 14, fontSize: 11.5, color: "#8A8478" },
+  doneWrap: { display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" },
+  receipt: { position: "relative", width: "100%", border: `1.5px solid ${PAPER_LINE}`, borderRadius: 3, padding: "20px 20px", background: "#FFFEFB", textAlign: "left" },
+  receiptRow: { display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px dashed ${PAPER_LINE}`, fontSize: 13.5 },
+  receiptLabel: { color: "#8A8478", fontWeight: 500 },
+  receiptValue: { color: INK, fontWeight: 700 },
+  stamp: { position: "absolute", width: 76, height: 76, left: "82%", top: "72%", transform: "translate(-50%,-50%) rotate(-12deg)" },
+  stampInner: { width: "100%", height: "100%", borderRadius: "50%", border: `3px solid ${SEAL}`, color: SEAL, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontFamily: "'Noto Serif KR', serif", fontWeight: 900, boxShadow: `inset 0 0 0 3px ${PAPER}, inset 0 0 0 4px ${SEAL}`, background: "rgba(178,58,58,0.04)" },
+  doneText: { marginTop: 22, fontSize: 13.5, color: "#5C5648", lineHeight: 1.6 },
+  ledger: { border: `1px solid ${PAPER_LINE}`, borderRadius: 3, overflow: "hidden" },
+  ledgerRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "12px 14px", borderBottom: `1px solid ${PAPER_LINE}`, background: "#FFFEFB" },
+  ledgerSub: { fontSize: 11.5, marginTop: 3, color: "#8A8478" },
+  toggleBtn: { padding: "8px 16px", border: "1.3px solid transparent", borderRadius: 3, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" },
+  toggleBtnOpen: { background: "transparent", color: SEAL, borderColor: SEAL },
+  toggleBtnClosed: { background: SAGE, color: PAPER },
+};
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+    } catch (err) {
+  document.getElementById("root").innerHTML = '<pre style="white-space:pre-wrap;padding:20px;color:#b23a3a;font-family:monospace;font-size:13px;">' + (err && err.stack ? err.stack : String(err)) + '</pre>';
+}
+
+</script>
+</body>
+</html>
