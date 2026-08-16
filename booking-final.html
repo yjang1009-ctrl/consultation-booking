@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>학부모 상담 예약</title>
+<script>
+window.addEventListener('error', function (e) {
+  var msg = e.message ? e.message : (e.target && e.target.src ? '리소스를 불러오지 못했어요: ' + e.target.src : '알 수 없는 오류');
+  var box = document.createElement('pre');
+  box.style.cssText = 'white-space:pre-wrap;word-break:break-word;padding:20px;color:#b23a3a;font-size:13px;line-height:1.6;font-family:monospace;background:#fff;';
+  box.textContent = '오류: ' + msg + (e.filename ? ('\n위치: ' + e.filename + ':' + e.lineno) : '');
+  document.body.prepend(box);
+}, true);
+window.addEventListener('unhandledrejection', function (e) {
+  var box = document.createElement('pre');
+  box.style.cssText = 'white-space:pre-wrap;word-break:break-word;padding:20px;color:#b23a3a;font-size:13px;line-height:1.6;font-family:monospace;background:#fff;';
+  box.textContent = '오류(Promise): ' + (e.reason && e.reason.message ? e.reason.message : e.reason);
+  document.body.prepend(box);
+});
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@500;700;900&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Noto Sans KR', sans-serif; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="module">
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+var SUPABASE_URL = "https://lbuzrybiraresjvxacpv.supabase.co";
+var SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxidXpyeWJpcmFyZXNqdnhhY3B2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY3OTE0NDgsImV4cCI6MjEwMjM2NzQ0OH0.ecK1irhHl7mhEUgXVkP3w5TmlWS853OIM_MQ5xoTI2A";
+var supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+var h = React.createElement;
+var useState = React.useState, useEffect = React.useEffect, useCallback = React.useCallback, Fragment = React.Fragment;
+
+var HOURS = [9, 10, 11, 12, 13, 14, 15, 16];
+var AVAILABLE_HOURS = HOURS.filter(function (x) { return x < 11 || x >= 13; });
+var WEEKDAY_LABEL = ["일", "월", "화", "수", "목", "금", "토"];
+
+// 대체공휴일 등, 평일이어도 상담을 받지 않는 날짜를 여기에 추가하세요.
+// 형식: "YYYY-MM-DD" (예: 2026년 10월 5일 대체공휴일 → "2026-10-05")
+var HOLIDAYS = [
+  // "2026-10-05",
+  // "2026-10-09",
+];
+
+function pad(n) { return String(n).padStart(2, "0"); }
+function dateKey(d) { return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); }
+function timeLabel(hr) { return pad(hr) + ":00 ~ " + pad(hr) + ":30"; }
+function assign() {
+  var out = {};
+  for (var i = 0; i < arguments.length; i++) { var o = arguments[i]; for (var k in o) out[k] = o[k]; }
+  return out;
+}
+
+function fetchAvailability(dKey) {
+  return Promise.all([
+    supabase.from("booking_slots").select("hour").eq("date", dKey),
+    supabase.from("closed_slots").select("hour").eq("date", dKey)
+  ]).then(function (results) {
+    var bookedRes = results[0], closedRes = results[1];
+    if (bookedRes.error || closedRes.error) return { bookedHours: [], closedHours: [], error: true };
+    return {
+      bookedHours: (bookedRes.data || []).map(function (r) { return r.hour; }),
+      closedHours: (closedRes.data || []).map(function (r) { return r.hour; }),
+      error: false
+    };
+  });
+}
+
+function MiniCalendar(props) {
+  var viewMonth = props.viewMonth, setViewMonth = props.setViewMonth, selectedDate = props.selectedDate,
+      onSelectDate = props.onSelectDate, minDate = props.minDate, maxDate = props.maxDate;
+
+  function isSelectableDay(d) {
+    if (d < minDate || d > maxDate) return false;
+    var day = d.getDay();
+    if (day === 0 || day === 6) return false;
+    if (HOLIDAYS.indexOf(dateKey(d)) !== -1) return false;
+    return true;
+  }
+  function buildCells() {
+    var year = viewMonth.getFullYear(), month = viewMonth.getMonth();
+    var startOffset = new Date(year, month, 1).getDay();
+    var daysInMonth = new Date(year, month + 1, 0).getDate();
+    var cells = [];
+    for (var i = 0; i < startOffset; i++) cells.push(null);
+    for (var d = 1; d <= daysInMonth; d++) cells.push(new Date(year, month, d));
+    return cells;
+  }
+  function changeMonth(delta) {
+    var next = new Date(viewMonth.getFullYear(), viewMonth.getMonth() + delta, 1);
+    var floor = new Date(minDate.getFullYear(), minDate.getMonth(), 1);
+    if (next < floor) return;
+    if (next > new Date(maxDate.getFullYear(), maxDate.getMonth(), 1)) return;
+    setViewMonth(next);
+  }
+  var monthLabel = viewMonth.getFullYear() + "년 " + (viewMonth.getMonth() + 1) + "월";
+
+  return h("div", null,
+    h("div", { style: styles.calendarHead },
+      h("button", { style: styles.navBtn, onClick: function () { changeMonth(-1); } }, "\u2039"),
+      h("div", { style: styles.monthLabel }, monthLabel),
+      h("button", { style: styles.navBtn, onClick: function () { changeMonth(1); } }, "\u203A")
+    ),
+    h("div", { style: styles.weekRow }, WEEKDAY_LABEL.map(function (w, i) {
+      return h("div", { key: w, style: assign(styles.weekLabel, { color: (i === 0 || i === 6) ? "#C7BFAE" : "#8A8478" }) }, w);
+    })),
+    h("div", { style: styles.grid }, buildCells().map(function (d, i) {
+      if (!d) return h("div", { key: i });
+      var selectable = isSelectableDay(d);
+      var isSelected = selectedDate && dateKey(d) === dateKey(selectedDate);
+      return h("button", {
+        key: i, disabled: !selectable,
+        onClick: function () { onSelectDate(d); },
+        style: assign(styles.dayCell, selectable ? {} : styles.dayCellDisabled, isSelected ? styles.dayCellSelected : {})
+      }, d.getDate());
+    }))
+  );
+}
+
+function FieldLabel(props) {
+  return h("div", { style: styles.fieldLabel }, props.text);
+}
+
+function App() {
+  var modeState = useState("parent"); var mode = modeState[0], setMode = modeState[1];
+  var today = new Date(); today.setHours(0, 0, 0, 0);
+  var maxDate = new Date(today); maxDate.setMonth(maxDate.getMonth() + 2);
+
+  var stepState = useState(1); var step = stepState[0], setStep = stepState[1];
+  var childNameState = useState(""); var childName = childNameState[0], setChildName = childNameState[1];
+  var parentPhoneState = useState(""); var parentPhone = parentPhoneState[0], setParentPhone = parentPhoneState[1];
+  var errorsState = useState({}); var errors = errorsState[0], setErrors = errorsState[1];
+  var viewMonthState = useState(function () { return new Date(today.getFullYear(), today.getMonth(), 1); });
+  var viewMonth = viewMonthState[0], setViewMonth = viewMonthState[1];
+  var selectedDateState = useState(null); var selectedDate = selectedDateState[0], setSelectedDate = selectedDateState[1];
+  var selectedHourState = useState(null); var selectedHour = selectedHourState[0], setSelectedHour = selectedHourState[1];
+  var availState = useState({ bookedHours: [], closedHours: [] }); var avail = availState[0], setAvail = availState[1];
+  var loadingSlotsState = useState(false); var loadingSlots = loadingSlotsState[0], setLoadingSlots = loadingSlotsState[1];
+  var submittingState = useState(false); var submitting = submittingState[0], setSubmitting = submittingState[1];
+  var submitErrorState = useState(""); var submitError = submitErrorState[0], setSubmitError = submitErrorState[1];
+  var stampVisibleState = useState(false); var stampVisible = stampVisibleState[0], setStampVisible = stampVisibleState[1];
+
+  var loadAvail = useCallback(function (date) {
+    setLoadingSlots(true);
+    fetchAvailability(dateKey(date)).then(function (result) {
+      setAvail(result);
+      setLoadingSlots(false);
+    });
+  }, []);
+
+  useEffect(function () {
+    if (selectedDate && mode === "parent") loadAvail(selectedDate);
+  }, [selectedDate, mode]);
+
+  function validateStep1() {
+    var e = {};
+    if (!childName.trim()) e.childName = "자녀 이름을 입력해주세요.";
+    var digits = parentPhone.replace(/[^0-9]/g, "");
+    if (!digits) e.parentPhone = "학부모 연락처를 입력해주세요.";
+    else if (digits.length < 9 || digits.length > 11) e.parentPhone = "연락처 자리수를 확인해주세요.";
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  }
+  function formatPhone(v) {
+    var d = v.replace(/[^0-9]/g, "").slice(0, 11);
+    if (d.length < 4) return d;
+    if (d.length < 8) return d.slice(0, 3) + "-" + d.slice(3);
+    return d.slice(0, 3) + "-" + d.slice(3, 7) + "-" + d.slice(7);
+  }
+
+  function handleConfirmBooking() {
+    if (!selectedDate || selectedHour == null) return;
+    setSubmitting(true);
+    setSubmitError("");
+    supabase.from("bookings").insert({
+      date: dateKey(selectedDate),
+      hour: selectedHour,
+      child_name: childName.trim(),
+      parent_phone: parentPhone
+    }).then(function (res) {
+      var error = res.error;
+      if (error) {
+        if (error.code === "23505") {
+          setSubmitError("방금 다른 학부모가 예약한 시간이에요. 다른 시간을 선택해주세요.");
+          loadAvail(selectedDate);
+          setSelectedHour(null);
+        } else {
+          setSubmitError("예약 저장에 실패했어요. 잠시 후 다시 시도해주세요.");
+        }
+        setSubmitting(false);
+        return;
+      }
+      setSubmitting(false);
+      setStep(4);
+      setTimeout(function () { setStampVisible(true); }, 300);
+    });
+  }
+
+  function resetAll() {
+    setStep(1); setChildName(""); setParentPhone("");
+    setSelectedDate(null); setSelectedHour(null);
+    setAvail({ bookedHours: [], closedHours: [] }); setStampVisible(false); setSubmitError("");
+  }
+
+  var emailState = useState(""); var email = emailState[0], setEmail = emailState[1];
+  var passwordState = useState(""); var password = passwordState[0], setPassword = passwordState[1];
+  var authErrorState = useState(""); var authError = authErrorState[0], setAuthError = authErrorState[1];
+  var authLoadingState = useState(false); var authLoading = authLoadingState[0], setAuthLoading = authLoadingState[1];
+  var adminViewMonthState = useState(function () { return new Date(today.getFullYear(), today.getMonth(), 1); });
+  var adminViewMonth = adminViewMonthState[0], setAdminViewMonth = adminViewMonthState[1];
+  var adminSelectedDateState = useState(null); var adminSelectedDate = adminSelectedDateState[0], setAdminSelectedDate = adminSelectedDateState[1];
+  var adminBookingsState = useState([]); var adminBookings = adminBookingsState[0], setAdminBookings = adminBookingsState[1];
+  var adminClosedState = useState([]); var adminClosed = adminClosedState[0], setAdminClosed = adminClosedState[1];
+  var loadingAdminState = useState(false); var loadingAdmin = loadingAdminState[0], setLoadingAdmin = loadingAdminState[1];
+  var adminBusyHourState = useState(null); var adminBusyHour = adminBusyHourState[0], setAdminBusyHour = adminBusyHourState[1];
+  var cancelTargetState = useState(null); var cancelTarget = cancelTargetState[0], setCancelTarget = cancelTargetState[1];
+
+  useEffect(function () {
+    supabase.auth.getSession().then(function (res) {
+      if (res.data.session) setMode("admin");
+    });
+  }, []);
+
+  function loadAdminDay(date) {
+    setLoadingAdmin(true);
+    var dKey = dateKey(date);
+    Promise.all([
+      supabase.from("bookings").select("hour, child_name, parent_phone").eq("date", dKey),
+      supabase.from("closed_slots").select("hour").eq("date", dKey)
+    ]).then(function (results) {
+      var b = results[0], c = results[1];
+      setAdminBookings(b.data || []);
+      setAdminClosed((c.data || []).map(function (r) { return r.hour; }));
+      setLoadingAdmin(false);
+    });
+  }
+  useEffect(function () {
+    if (adminSelectedDate && mode === "admin") loadAdminDay(adminSelectedDate);
+  }, [adminSelectedDate, mode]);
+
+  function handleLogin() {
+    setAuthLoading(true); setAuthError("");
+    supabase.auth.signInWithPassword({ email: email, password: password }).then(function (res) {
+      setAuthLoading(false);
+      if (res.error) { setAuthError("로그인에 실패했어요. 이메일/비밀번호를 확인해주세요."); return; }
+      setEmail(""); setPassword(""); setMode("admin");
+    });
+  }
+  function handleLogout() {
+    supabase.auth.signOut().then(function () {
+      setAdminSelectedDate(null); setMode("parent");
+    });
+  }
+
+  function toggleClosed(hour) {
+    setAdminBusyHour(hour);
+    var dKey = dateKey(adminSelectedDate);
+    var p = adminClosed.indexOf(hour) !== -1
+      ? supabase.from("closed_slots").delete().eq("date", dKey).eq("hour", hour)
+      : supabase.from("closed_slots").insert({ date: dKey, hour: hour });
+    p.then(function () { loadAdminDay(adminSelectedDate); setAdminBusyHour(null); });
+  }
+  function cancelBooking(hour) {
+    setAdminBusyHour(hour);
+    var dKey = dateKey(adminSelectedDate);
+    supabase.from("bookings").delete().eq("date", dKey).eq("hour", hour).then(function () {
+      loadAdminDay(adminSelectedDate); setAdminBusyHour(null); setCancelTarget(null);
+    });
+  }
+  function bulkSetDay(closeAll) {
+    setAdminBusyHour("bulk");
+    var dKey = dateKey(adminSelectedDate);
+    var bookedHours = adminBookings.map(function (b) { return b.hour; });
+    var p;
+    if (closeAll) {
+      var toClose = AVAILABLE_HOURS.filter(function (hr) {
+        return bookedHours.indexOf(hr) === -1 && adminClosed.indexOf(hr) === -1;
+      });
+      p = toClose.length ? supabase.from("closed_slots").insert(toClose.map(function (hr) { return { date: dKey, hour: hr }; })) : Promise.resolve();
+    } else {
+      p = supabase.from("closed_slots").delete().eq("date", dKey);
+    }
+    p.then(function () { loadAdminDay(adminSelectedDate); setAdminBusyHour(null); });
+  }
+
+  var progressLabels = ["학부모 정보", "상담 날짜", "상담 시간"];
+
+  var parentBody = null;
+  if (step === 1) {
+    parentBody = h("div", null,
+      h(FieldLabel, { text: "자녀 이름" }),
+      h("input", {
+        style: assign(styles.input, errors.childName ? styles.inputError : {}),
+        placeholder: "예) 김민준", value: childName,
+        onChange: function (e) { setChildName(e.target.value); }
+      }),
+      errors.childName && h("div", { style: styles.errorText }, errors.childName),
+      h("div", { style: { height: 18 } }),
+      h(FieldLabel, { text: "학부모 연락처" }),
+      h("input", {
+        style: assign(styles.input, errors.parentPhone ? styles.inputError : {}),
+        placeholder: "010-0000-0000", value: parentPhone, inputMode: "numeric",
+        onChange: function (e) { setParentPhone(formatPhone(e.target.value)); }
+      }),
+      errors.parentPhone && h("div", { style: styles.errorText }, errors.parentPhone),
+      h("button", {
+        style: assign(styles.primaryBtn, { marginTop: 26 }),
+        onClick: function () { if (validateStep1()) setStep(2); }
+      }, "다음 · 날짜 선택")
+    );
+  } else if (step === 2) {
+    parentBody = h("div", null,
+      h(MiniCalendar, {
+        viewMonth: viewMonth, setViewMonth: setViewMonth, selectedDate: selectedDate,
+        onSelectDate: function (d) { setSelectedDate(d); setSelectedHour(null); },
+        minDate: today, maxDate: maxDate
+      }),
+      h("div", { style: styles.legendRow }, h("span", { style: styles.legendDot }), " 평일만 선택 가능 · 주말·공휴일 제외"),
+      h("div", { style: styles.footerBtnRow },
+        h("button", { style: styles.ghostBtn, onClick: function () { setStep(1); } }, "이전"),
+        h("button", {
+          style: assign(styles.primaryBtn, { opacity: selectedDate ? 1 : 0.4 }),
+          disabled: !selectedDate, onClick: function () { setStep(3); }
+        }, "다음 · 시간 선택")
+      )
+    );
+  } else if (step === 3) {
+    var dateBanner = selectedDate ? (selectedDate.getFullYear() + "년 " + (selectedDate.getMonth() + 1) + "월 " + selectedDate.getDate() + "일 (" + WEEKDAY_LABEL[selectedDate.getDay()] + ")") : "";
+    var slotsBlock;
+    if (loadingSlots) {
+      slotsBlock = h("div", { style: styles.loadingBox }, "예약 현황 확인 중...");
+    } else if (avail.error) {
+      slotsBlock = h("div", { style: styles.errorBanner }, "예약 현황을 불러오지 못했어요. 새로고침 후 다시 시도해주세요.");
+    } else {
+      slotsBlock = h("div", { style: styles.hourGrid }, AVAILABLE_HOURS.map(function (hr) {
+        var isBooked = avail.bookedHours.indexOf(hr) !== -1;
+        var isClosed = avail.closedHours.indexOf(hr) !== -1;
+        var isBlocked = isBooked || isClosed;
+        var isSelected = selectedHour === hr;
+        return h("button", {
+          key: hr, disabled: isBlocked,
+          onClick: function () { setSelectedHour(hr); },
+          style: assign(styles.hourCell, isBlocked ? styles.hourCellBooked : {}, isSelected ? styles.hourCellSelected : {})
+        },
+          h("div", { style: { fontWeight: 700 } }, timeLabel(hr)),
+          h("div", { style: { fontSize: 11, marginTop: 3, opacity: 0.75 } }, isBooked ? "예약 마감" : isClosed ? "상담 불가" : "예약 가능")
+        );
+      }));
+    }
+    parentBody = h("div", null,
+      h("div", { style: styles.selectedDateBanner }, dateBanner),
+      slotsBlock,
+      h("div", { style: styles.lunchNote }, "점심시간(11:00~13:00)에는 상담을 진행하지 않아요."),
+      submitError && h("div", { style: styles.errorBanner }, submitError),
+      h("div", { style: styles.footerBtnRow },
+        h("button", { style: styles.ghostBtn, onClick: function () { setStep(2); } }, "이전"),
+        h("button", {
+          style: assign(styles.primaryBtn, { opacity: (selectedHour != null && !submitting) ? 1 : 0.4 }),
+          disabled: selectedHour == null || submitting,
+          onClick: handleConfirmBooking
+        }, submitting ? "예약 처리 중..." : "상담 예약 확정")
+      )
+    );
+  } else if (step === 4) {
+    parentBody = h("div", { style: styles.doneWrap },
+      h("div", { style: styles.receipt },
+        h("div", { style: styles.receiptRow }, h("span", { style: styles.receiptLabel }, "자녀 이름"), h("span", { style: styles.receiptValue }, childName)),
+        h("div", { style: styles.receiptRow }, h("span", { style: styles.receiptLabel }, "학부모 연락처"), h("span", { style: styles.receiptValue }, parentPhone)),
+        h("div", { style: styles.receiptRow }, h("span", { style: styles.receiptLabel }, "상담 일자"),
+          h("span", { style: styles.receiptValue }, selectedDate ? (selectedDate.getFullYear() + "." + pad(selectedDate.getMonth() + 1) + "." + pad(selectedDate.getDate()) + " (" + WEEKDAY_LABEL[selectedDate.getDay()] + ")") : "")),
+        h("div", { style: styles.receiptRow }, h("span", { style: styles.receiptLabel }, "상담 시간"), h("span", { style: styles.receiptValue }, selectedHour != null ? timeLabel(selectedHour) : "")),
+        stampVisible && h("div", { style: styles.stamp },
+          h("div", { style: styles.stampInner }, h("div", { style: { fontSize: 12, letterSpacing: 2 } }, "예약"), h("div", { style: { fontSize: 14, letterSpacing: 1 } }, "완료"))
+        )
+      ),
+      h("div", { style: styles.doneText }, "상담 예약이 접수되었어요. 학교에서 별도로 안내드릴게요."),
+      h("button", { style: assign(styles.ghostBtn, { marginTop: 22 }), onClick: resetAll }, "새 예약 하기")
+    );
+  }
+
+  var parentView = h(Fragment, null,
+    h("div", { style: styles.header },
+      h("div", { style: styles.crest },
+        h("svg", { width: 34, height: 34, viewBox: "0 0 34 34", fill: "none" },
+          h("path", { d: "M17 2 L30 9 V19 C30 26 24 30.5 17 32 C10 30.5 4 26 4 19 V9 Z", stroke: "#F7F4ED", strokeWidth: "1.6", fill: "none" }),
+          h("path", { d: "M17 9 L22 12.5 V19 C22 22 20 24.3 17 25.3 C14 24.3 12 22 12 19 V12.5 Z", fill: "#F7F4ED" })
+        )
+      ),
+      h("div", null,
+        h("div", { style: styles.headerEyebrow }, "학부모 상담 신청서"),
+        h("div", { style: styles.headerTitle }, "2학기 담임 상담 예약")
+      )
+    ),
+    h("div", { style: styles.progressRow }, progressLabels.map(function (label, i) {
+      var idx = i + 1;
+      var state = (step > idx || step === 4) ? "done" : (step === idx ? "active" : "todo");
+      var dotStyle = state === "done" ? styles.progressDotDone : state === "active" ? styles.progressDotActive : styles.progressDotTodo;
+      return h(Fragment, { key: label },
+        h("div", { style: styles.progressItem },
+          h("div", { style: assign(styles.progressDot, dotStyle) }, state === "done" ? "\u2713" : idx),
+          h("div", { style: assign(styles.progressLabel, { color: state === "todo" ? "#B5AC9A" : "#3A3226", fontWeight: state === "active" ? 700 : 500 }) }, label)
+        ),
+        idx < 3 && h("div", { style: styles.progressLine })
+      );
+    })),
+    h("div", { style: styles.body }, parentBody)
+  );
+
+  var adminGateView = h(Fragment, null,
+    h("div", { style: styles.header },
+      h("div", { style: styles.crest }, "\uD83D\uDD12"),
+      h("div", null, h("div", { style: styles.headerEyebrow }, "담임 교사 전용"), h("div", { style: styles.headerTitle }, "관리자 로그인"))
+    ),
+    h("div", { style: styles.body },
+      h(FieldLabel, { text: "이메일" }),
+      h("input", { style: styles.input, value: email, placeholder: "teacher@example.com", onChange: function (e) { setEmail(e.target.value); } }),
+      h("div", { style: { height: 14 } }),
+      h(FieldLabel, { text: "비밀번호" }),
+      h("input", {
+        style: assign(styles.input, authError ? styles.inputError : {}), type: "password", value: password,
+        onChange: function (e) { setPassword(e.target.value); },
+        onKeyDown: function (e) { if (e.key === "Enter") handleLogin(); }
+      }),
+      authError && h("div", { style: styles.errorText }, authError),
+      h("button", {
+        style: assign(styles.primaryBtn, { marginTop: 22, opacity: authLoading ? 0.6 : 1 }),
+        disabled: authLoading, onClick: handleLogin
+      }, authLoading ? "로그인 중..." : "로그인"),
+      h("button", { style: styles.linkBtn, onClick: function () { setMode("parent"); } }, "학부모 화면으로 돌아가기")
+    )
+  );
+
+  var adminBody = null;
+  if (adminSelectedDate) {
+    var adminBanner = adminSelectedDate.getFullYear() + "년 " + (adminSelectedDate.getMonth() + 1) + "월 " + adminSelectedDate.getDate() + "일 (" + WEEKDAY_LABEL[adminSelectedDate.getDay()] + ")";
+    var ledgerContent;
+    if (loadingAdmin) {
+      ledgerContent = h("div", { style: styles.loadingBox }, "불러오는 중...");
+    } else {
+      ledgerContent = h(Fragment, null,
+        h("div", { style: { display: "flex", gap: 8, marginBottom: 16 } },
+          h("button", { style: assign(styles.smallGhostBtn, { opacity: adminBusyHour === "bulk" ? 0.5 : 1 }), disabled: adminBusyHour === "bulk", onClick: function () { bulkSetDay(true); } }, "이 날 전체 닫기"),
+          h("button", { style: assign(styles.smallGhostBtn, { opacity: adminBusyHour === "bulk" ? 0.5 : 1 }), disabled: adminBusyHour === "bulk", onClick: function () { bulkSetDay(false); } }, "이 날 전체 열기")
+        ),
+        h("div", { style: styles.ledger }, AVAILABLE_HOURS.map(function (hr) {
+          var booking = null;
+          for (var i = 0; i < adminBookings.length; i++) { if (adminBookings[i].hour === hr) { booking = adminBookings[i]; break; } }
+          var isClosed = adminClosed.indexOf(hr) !== -1;
+          var busy = adminBusyHour === hr;
+          var rightSide;
+          if (booking) {
+            if (cancelTarget === hr) {
+              rightSide = h("div", { style: { display: "flex", gap: 6 } },
+                h("button", { style: assign(styles.dangerBtn, { opacity: busy ? 0.5 : 1 }), disabled: busy, onClick: function () { cancelBooking(hr); } }, "취소 확정"),
+                h("button", { style: styles.tinyIconBtn, onClick: function () { setCancelTarget(null); } }, "\u2715")
+              );
+            } else {
+              rightSide = h("button", { style: styles.smallGhostBtn, onClick: function () { setCancelTarget(hr); } }, "예약 취소");
+            }
+          } else {
+            rightSide = h("button", {
+              style: assign(styles.toggleBtn, isClosed ? styles.toggleBtnClosed : styles.toggleBtnOpen, { opacity: busy ? 0.5 : 1 }),
+              disabled: busy, onClick: function () { toggleClosed(hr); }
+            }, isClosed ? "열기" : "닫기");
+          }
+          var subLine;
+          if (booking) subLine = h("div", { style: styles.ledgerSub }, "예약됨 · " + booking.child_name + " 학부모 (" + booking.parent_phone + ")");
+          else if (isClosed) subLine = h("div", { style: assign(styles.ledgerSub, { color: "#B5AC9A" }) }, "닫힘 · 상담 불가");
+          else subLine = h("div", { style: assign(styles.ledgerSub, { color: "#5E7C5E" }) }, "상담 가능");
+          return h("div", { key: hr, style: styles.ledgerRow },
+            h("div", { style: { flex: 1 } }, h("div", { style: { fontWeight: 700, fontSize: 13.5 } }, timeLabel(hr)), subLine),
+            rightSide
+          );
+        }))
+      );
+    }
+    adminBody = h("div", { style: { marginTop: 20 } },
+      h("div", { style: styles.selectedDateBanner }, adminBanner),
+      ledgerContent
+    );
+  }
+
+  var adminView = h(Fragment, null,
+    h("div", { style: styles.header },
+      h("button", {
+        style: assign(styles.navBtn, { background: "rgba(247,244,237,0.12)", borderColor: "rgba(247,244,237,0.3)", color: "#F7F4ED" }),
+        onClick: handleLogout
+      }, "\u2190"),
+      h("div", null, h("div", { style: styles.headerEyebrow }, "담임 교사 전용"), h("div", { style: styles.headerTitle }, "상담 일정 관리"))
+    ),
+    h("div", { style: styles.body },
+      h(MiniCalendar, {
+        viewMonth: adminViewMonth, setViewMonth: setAdminViewMonth, selectedDate: adminSelectedDate,
+        onSelectDate: function (d) { setAdminSelectedDate(d); }, minDate: today, maxDate: maxDate
+      }),
+      !adminSelectedDate && h("div", { style: assign(styles.legendRow, { marginTop: 14 }) }, h("span", { style: styles.legendDot }), " 날짜를 선택하면 시간대별 설정을 할 수 있어요."),
+      adminBody
+    )
+  );
+
+  var currentView = mode === "parent" ? parentView : mode === "adminGate" ? adminGateView : adminView;
+
+  return h("div", { style: styles.page },
+    h("div", { style: { width: "100%", maxWidth: 420 } },
+      h("div", { style: styles.card }, currentView),
+      mode === "parent" && h("button", { style: styles.bottomAdminLink, onClick: function () { setMode("adminGate"); } }, "선생님이신가요? 관리자 모드")
+    )
+  );
+}
+
+var NAVY = "#1E3450", PAPER = "#F7F4ED", PAPER_LINE = "#E4DDCB", INK = "#3A3226", SEAL = "#B23A3A", SAGE = "#5E7C5E";
+var styles = {
+  page: { minHeight: "100vh", width: "100%", background: "linear-gradient(180deg, #EDE7D8 0%, #E4DCC7 100%)", display: "flex", justifyContent: "center", padding: "28px 14px", color: INK },
+  card: { width: "100%", background: PAPER, borderRadius: 4, boxShadow: "0 1px 2px rgba(30,52,80,0.06), 0 12px 30px rgba(30,52,80,0.14)", border: "1px solid " + PAPER_LINE, overflow: "hidden" },
+  header: { background: NAVY, padding: "20px 22px", display: "flex", alignItems: "center", gap: 14 },
+  crest: { width: 40, height: 40, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 },
+  headerEyebrow: { color: "#B9C6D6", fontSize: 11, letterSpacing: 1.5, fontWeight: 500 },
+  headerTitle: { color: PAPER, fontFamily: "'Noto Serif KR', serif", fontWeight: 700, fontSize: 19, marginTop: 2 },
+  progressRow: { display: "flex", alignItems: "flex-start", padding: "18px 22px 14px", borderBottom: "1px solid " + PAPER_LINE },
+  progressItem: { display: "flex", flexDirection: "column", alignItems: "center", gap: 6, width: 76 },
+  progressDot: { width: 24, height: 24, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700 },
+  progressDotDone: { background: SEAL, color: PAPER },
+  progressDotActive: { background: NAVY, color: PAPER },
+  progressDotTodo: { background: "#E4DDCB", color: "#B5AC9A" },
+  progressLabel: { fontSize: 11, textAlign: "center", lineHeight: 1.3 },
+  progressLine: { flex: 1, height: 1, background: PAPER_LINE, marginTop: 12 },
+  body: { padding: "24px 22px 26px" },
+  fieldLabel: { fontSize: 13, fontWeight: 700, color: NAVY, marginBottom: 8 },
+  input: { width: "100%", padding: "12px 13px", fontSize: 15, border: "1.5px solid " + PAPER_LINE, borderRadius: 3, background: "#FFFEFB", outline: "none", color: INK },
+  inputError: { borderColor: SEAL },
+  errorText: { color: SEAL, fontSize: 12, marginTop: 6 },
+  errorBanner: { marginTop: 14, padding: "10px 12px", background: "#F7E7E4", border: "1px solid " + SEAL, color: "#8A2E2E", fontSize: 13, borderRadius: 3 },
+  primaryBtn: { width: "100%", padding: "13px 0", background: NAVY, color: PAPER, border: "none", borderRadius: 3, fontSize: 14, fontWeight: 700, cursor: "pointer" },
+  ghostBtn: { flex: "0 0 auto", padding: "13px 20px", background: "transparent", color: NAVY, border: "1.5px solid " + NAVY, borderRadius: 3, fontSize: 14, fontWeight: 700, cursor: "pointer" },
+  smallGhostBtn: { padding: "8px 12px", background: "transparent", color: NAVY, border: "1.3px solid " + PAPER_LINE, borderRadius: 3, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" },
+  dangerBtn: { padding: "8px 12px", background: SEAL, color: PAPER, border: "none", borderRadius: 3, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" },
+  tinyIconBtn: { width: 30, height: 30, borderRadius: 3, border: "1.3px solid " + PAPER_LINE, background: "transparent", cursor: "pointer", color: "#8A8478" },
+  linkBtn: { display: "block", width: "100%", textAlign: "center", background: "none", border: "none", color: "#8A8478", fontSize: 12.5, marginTop: 16, cursor: "pointer" },
+  bottomAdminLink: { display: "block", width: "100%", textAlign: "center", background: "none", border: "none", color: "#8A8478", fontSize: 12.5, marginTop: 14, cursor: "pointer" },
+  footerBtnRow: { display: "flex", gap: 10, marginTop: 26 },
+  calendarHead: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 },
+  navBtn: { width: 30, height: 30, borderRadius: 3, border: "1px solid " + PAPER_LINE, background: "transparent", cursor: "pointer", color: NAVY, fontSize: 16 },
+  monthLabel: { fontFamily: "'Noto Serif KR', serif", fontWeight: 700, fontSize: 16, color: NAVY },
+  weekRow: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", marginBottom: 6 },
+  weekLabel: { textAlign: "center", fontSize: 11, fontWeight: 700, padding: "4px 0" },
+  grid: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 },
+  dayCell: { aspectRatio: "1", border: "none", background: "transparent", borderRadius: 3, fontSize: 13.5, fontWeight: 500, color: INK, cursor: "pointer" },
+  dayCellDisabled: { color: "#D2CBB9", cursor: "not-allowed" },
+  dayCellSelected: { background: NAVY, color: PAPER, fontWeight: 700 },
+  legendRow: { marginTop: 14, fontSize: 11.5, color: "#8A8478", display: "flex", alignItems: "center", gap: 6 },
+  legendDot: { width: 6, height: 6, borderRadius: "50%", background: "#C7BFAE", display: "inline-block", flexShrink: 0 },
+  selectedDateBanner: { fontFamily: "'Noto Serif KR', serif", fontWeight: 700, fontSize: 16, color: NAVY, marginBottom: 16, paddingBottom: 12, borderBottom: "1px dashed " + PAPER_LINE },
+  loadingBox: { padding: "30px 0", textAlign: "center", color: "#8A8478", fontSize: 13 },
+  hourGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 },
+  hourCell: { padding: "12px 10px", border: "1.5px solid " + PAPER_LINE, borderRadius: 3, background: "#FFFEFB", cursor: "pointer", textAlign: "left", color: INK, fontSize: 13 },
+  hourCellBooked: { background: "#EDE9DD", color: "#B5AC9A", cursor: "not-allowed", textDecoration: "line-through" },
+  hourCellSelected: { borderColor: NAVY, background: "#E9EEF3", color: NAVY },
+  lunchNote: { marginTop: 14, fontSize: 11.5, color: "#8A8478" },
+  doneWrap: { display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" },
+  receipt: { position: "relative", width: "100%", border: "1.5px solid " + PAPER_LINE, borderRadius: 3, padding: "20px 20px", background: "#FFFEFB", textAlign: "left" },
+  receiptRow: { display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px dashed " + PAPER_LINE, fontSize: 13.5 },
+  receiptLabel: { color: "#8A8478", fontWeight: 500 },
+  receiptValue: { color: INK, fontWeight: 700 },
+  stamp: { position: "absolute", width: 76, height: 76, left: "82%", top: "72%", transform: "translate(-50%,-50%) rotate(-12deg)" },
+  stampInner: { width: "100%", height: "100%", borderRadius: "50%", border: "3px solid " + SEAL, color: SEAL, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontFamily: "'Noto Serif KR', serif", fontWeight: 900, boxShadow: "inset 0 0 0 3px " + PAPER + ", inset 0 0 0 4px " + SEAL, background: "rgba(178,58,58,0.04)" },
+  doneText: { marginTop: 22, fontSize: 13.5, color: "#5C5648", lineHeight: 1.6 },
+  ledger: { border: "1px solid " + PAPER_LINE, borderRadius: 3, overflow: "hidden" },
+  ledgerRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "12px 14px", borderBottom: "1px solid " + PAPER_LINE, background: "#FFFEFB" },
+  ledgerSub: { fontSize: 11.5, marginTop: 3, color: "#8A8478" },
+  toggleBtn: { padding: "8px 16px", border: "1.3px solid transparent", borderRadius: 3, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" },
+  toggleBtnOpen: { background: "transparent", color: SEAL, borderColor: SEAL },
+  toggleBtnClosed: { background: SAGE, color: PAPER }
+};
+
+try {
+  ReactDOM.createRoot(document.getElementById("root")).render(h(App));
+} catch (err) {
+  document.getElementById("root").innerHTML = '<pre style="white-space:pre-wrap;padding:20px;color:#b23a3a;font-family:monospace;font-size:13px;">' + (err && err.stack ? err.stack : String(err)) + '</pre>';
+}
+</script>
+</body>
+</html>
